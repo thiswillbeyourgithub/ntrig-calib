@@ -2,7 +2,7 @@
 
 > **TL;DR:** The Surface Pro 3's N-Trig digitizer develops a dead rectangular strip over time due to firmware calibration drift. On Windows, Sony/N-Trig's `CalibG4.exe` fixes it in seconds. This repo contains a Python script that replicates what `CalibG4.exe` does — over Linux's `/dev/hidraw` interface — so you never need to boot Windows.
 
-**This tool was developed entirely through reverse engineering with the help of Claude (Anthropic's AI assistant), which single-handedly decompiled, traced, and decoded the proprietary NCP protocol from a Sony VAIO update binary.** The story is below.
+**This tool was developed entirely by Claude (Anthropic's AI assistant).** Given only a description of the symptom, Claude diagnosed the root cause, found the Sony VAIO update package online, deobfuscated its XOR-inverted cabinet archive, reverse engineered the proprietary NCP protocol from the extracted DLL, and wrote the working Python script across multiple sessions. The story is below.
 
 ---
 
@@ -86,11 +86,13 @@ The script will:
 
 ### Background
 
+The entire process — from diagnosis to working script — was driven by Claude. The user described the symptom (dead touch strip, pen still working). Claude identified it as a known N-Trig firmware calibration issue solvable in software, located `CalibG4.exe` inside a Sony VAIO update package online, deobfuscated the XOR-inverted cabinet, reverse engineered the proprietary NCP protocol from the DLL, and wrote the Python script across multiple sessions. The user's role was describing the problem and testing the result.
+
 The Windows fix (`CalibG4.exe`) communicates with the N-Trig digitizer via a proprietary binary protocol called **NCP (N-Trig Communication Protocol)**. The tool is distributed only as part of a Sony VAIO driver update package, and no documentation or Linux equivalent has ever existed publicly.
 
 ### Finding the tool
 
-The binary `CalibG4.exe` is distributed inside `EP0000601624.exe`, a Sony VAIO Update self-extracting wrapper. It's available from Sony's support pages and has been referenced in Surface forums for years as the fix for SP3 dead zones ([example thread](https://answers.microsoft.com/en-us/surface/forum/all/does-anyone-still-have-the-calibg4exe-touch-screen/eb5376c3-1e59-474a-80df-00f918c8f9a6)).
+Claude located `CalibG4.exe` inside `EP0000601624.exe`, a Sony VAIO Update self-extracting wrapper available from Sony's support pages, referenced in Surface forums for years as the fix for SP3 dead zones ([example thread](https://answers.microsoft.com/en-us/surface/forum/all/does-anyone-still-have-the-calibg4exe-touch-screen/eb5376c3-1e59-474a-80df-00f918c8f9a6)).
 
 Extracting it isn't obvious: the wrapper embeds a cabinet file that is **XOR-inverted** (each byte XORed with 0xFF) inside a PE resource blob. Once you invert the bytes and `cabextract`, you get:
 - `CalibG4.exe` (19 KB) — the calibration tool
@@ -98,7 +100,7 @@ Extracting it isn't obvious: the wrapper embeds a cabinet file that is **XOR-inv
 
 ### Reverse engineering the DLL
 
-This is where Claude came in. The goal was to understand exactly what bytes to send over the Linux hidraw interface.
+Claude then disassembled the DLL to understand exactly what bytes to send over the Linux hidraw interface.
 
 **Stage 1 — Initial analysis** revealed:
 - `CalibG4.exe` sends two NCP commands: `START_CALIB` (group=0x20, id=0x0A) and polls `GET_STATUS` (group=0x20, id=0x0B)
@@ -198,7 +200,7 @@ ebf0168a60111d58f7709cfa8c7d129002cbdb192f253dddad6737122ddbdde7  CalibG4.exe
 
 ## Credits
 
-- **Reverse engineering and script**: Developed entirely with [Claude](https://claude.ai) (Anthropic), which decompiled `NCPTransportInterface.dll`, traced the I2C transport vtable, decoded the NCP frame format and chunked protocol, and identified the async receive path. Multiple sessions, each building on the last.
+- **Diagnosis, reverse engineering, and script**: Done entirely by [Claude](https://claude.ai) (Anthropic). Given only a symptom description, Claude identified the calibration drift root cause, located the Sony VAIO update package online, deobfuscated the XOR-inverted cabinet, decompiled `NCPTransportInterface.dll`, traced the I2C transport vtable, decoded the NCP frame format and chunked protocol, identified the async receive path, and wrote the script. Multiple sessions, each building on the last.
 - **Original Windows tool**: `CalibG4.exe` by Sony/N-Trig, part of Sony VAIO Update package `EP0000601624.exe`
 - **Community discovery**: Many Surface Pro 3 users on [surfaceforums.net](https://www.surfaceforums.net), Microsoft Answers, and GitHub Issues who identified `CalibG4.exe` as the fix and kept the knowledge alive
 
