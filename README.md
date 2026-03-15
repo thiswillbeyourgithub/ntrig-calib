@@ -179,6 +179,17 @@ The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!
 | `ntrig_calib.py` | The Linux calibration script |
 | `README.md` | This file |
 
+### CalibG4.exe and NCPTransportInterface.dll
+
+The Windows binaries (`CalibG4.exe` and `NCPTransportInterface.dll`) were extracted from [EP0000601624.zip](https://gartnertechnology.com/wp-content/uploads/2024/01/EP0000601624.zip) (also [saved by the Internet Archive](https://web.archive.org/web/20260315181048/https://gartnertechnology.com/wp-content/uploads/2024/01/EP0000601624.zip)). As long as these links are up, I don't want to republish these files. If you have trouble finding them, open an issue and I'll see if it's okay to send them to you or something.
+
+**SHA-256 checksums:**
+```
+822a319fc8bb3d3a9fce50f9610124f3838c20a638f727c70c984fe88356ba44  EP0000601624.zip
+89160d12677f2bd98f21db01651677d62dd0c242082bc9591edf41e330d7dd91  NCPTransportInterface.dll
+ebf0168a60111d58f7709cfa8c7d129002cbdb192f253dddad6737122ddbdde7  CalibG4.exe
+```
+
 ---
 
 ## Credits
