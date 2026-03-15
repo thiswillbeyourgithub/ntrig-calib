@@ -60,14 +60,14 @@ Claude then used [Ghidra](https://ghidra-sre.org/) to disassemble the DLL and un
 
 **Stage 1 — Initial analysis** revealed:
 - `CalibG4.exe` sends two NCP commands: `START_CALIB` (group=0x20, id=0x0A) and polls `GET_STATUS` (group=0x20, id=0x0B)
-- Status responses: `\x42\x42\x42` ("BBB") = complete, `\x63\x63\x63` ("ccc") = in progress, `\x21\x21\x21` ("!!!") = waiting
+- Status responses: `\x42\x42\x42` ("BBB") = complete, `\x63\x63\x63` ("ccc") = in progress, `\x21\x21\x21` ("!!!") = unknown/intermediate ("Unknown status, waiting")
 - All actual communication goes through `NCPTransportInterface.dll`
 
 **Stage 2 — NCP frame format** (from Ghidra disassembly of `0x18000D0D0`):
 
 ```
 Byte  0:     0x7E  — start marker
-Bytes 1-2:   Module ID (LE uint16)
+Bytes 1-2:   Module ID (LE uint16) — DLL derives this via UuidCreate() at runtime; 0x0001 is a working hardcoded substitute
 Bytes 3-4:   Total frame size (LE uint16) = 14 + payload_len + 1
 Byte  5:     Flags: 0x01 = expects response, 0x41 = fire-and-forget
 Byte  6:     Command group (0x20 = calibration)
@@ -92,8 +92,10 @@ Claude disassembled the I2C transport class's vtable in Ghidra and traced the fu
 if [this+0x7c] != 0:
     → CHUNKED PATH: report 0x05, 61-byte chunks
 else:
-    → DIRECT PATH: reports 0x29–0x2D (hardcoded, don't exist on Linux)
+    → DIRECT PATH: reports 0x29–0x2D (I2C direct) or 0x2E–0x35 (USB-HID)
 ```
+
+The flag `[this+0x7c]` is not set unconditionally — it is only activated after a **capability probe sequence** in which the DLL sends cmd_ids `0x01`, `0x0B`, `0x0C` to the device, and chunked mode is enabled only when the `0x0C` probe succeeds. The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to separate HID collections — distinct PDOs in the Windows HID device tree — which is why they don't appear as separate nodes under Linux's single `/dev/hidrawN` interface.
 
 The chunked protocol (function `0x18000CC80`):
 ```
@@ -117,10 +119,16 @@ Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
                    ^^                    ^^
                    NCP marker            cmd_group=0x20, cmd_id=0x0B (GET_STATUS response)
                                                                       ^^^^^^^^^^^
-                                                                      payload = "!!!" = calibration triggered
+                                                                      payload = "!!!" = unknown/intermediate state
 ```
 
-The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` status means the calibration is running. The screen was fully fixed after this ran.
+The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state, not a confirmed trigger. The DLL continues polling after receiving it. The screen was fully fixed after the sequence completed.
+
+**Full CalibG4 call sequence (from Ghidra):**
+- Read buffer: 4096 bytes
+- `START_CALIB` timeout: 3000 ms
+- Status poll loop: up to 60 iterations × 500 ms = 30 seconds max
+- Explicit `DeInit` + `Deregister` cleanup at end
 
 ### Summary of failed approaches (for future reference)
 
