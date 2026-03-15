@@ -192,13 +192,6 @@ ebf0168a60111d58f7709cfa8c7d129002cbdb192f253dddad6737122ddbdde7  CalibG4.exe
 
 ---
 
-## Related Issues
-
-This tool addresses the same problem discussed in:
-- *(add links to github issues here)*
-
----
-
 ## License
 
 The Python script (`ntrig_calib.py`) is released under the AGPLv3 License. See [LICENSE](./LICENSE) file.
