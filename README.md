@@ -71,7 +71,7 @@ The script will:
 
 **After running, touch the previously-dead area.** It should respond immediately. No reboot required.
 
-> **Note on longevity:** A [2017 report from René Rebe](https://rene.rebe.de/2017-07-29/n-trig-touch-screens-occasionally-need-re-calibration/) noted that calibration may be temporary on some units — lasting only "a day, or a boot or two" before drift recurs. If the dead zone comes back, re-run the script. Frequent recurrence may indicate the digitizer hardware is physically degrading.
+> **Note on longevity:** A [2017 report from René Rebe](https://web.archive.org/web/20250324201828/https://rene.rebe.de/2017-07-29/n-trig-touch-screens-occasionally-need-re-calibration/) ([video](https://www.youtube.com/watch?v=mVX-7ZI8ysk)) noted that calibration may be temporary on some units — lasting only "a day, or a boot or two" before drift recurs. If the dead zone comes back, re-run the script. Frequent recurrence may indicate the digitizer hardware is physically degrading.
 
 ### Requirements
 
