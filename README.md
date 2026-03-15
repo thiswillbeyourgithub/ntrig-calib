@@ -2,7 +2,20 @@
 
 > **TL;DR:** The Surface Pro 3's N-Trig digitizer develops a dead rectangular strip over time due to firmware calibration drift. On Windows, Sony/N-Trig's `CalibG4.exe` fixes it in seconds. This repo contains a Python script that replicates what `CalibG4.exe` does — over Linux's `/dev/hidraw` interface — so you never need to boot Windows.
 
-**This tool was developed entirely by Claude (Anthropic's AI assistant).** Given only a description of the symptom, Claude diagnosed the root cause, found the Sony VAIO update package online, deobfuscated its XOR-inverted cabinet archive, reverse engineered the proprietary NCP protocol from the extracted DLL, and wrote the working Python script across multiple sessions. The story is below.
+**This tool was developed entirely by Claude Opus 4.6 with extended thinking (Anthropic's AI assistant), via the Claude mobile app on an iPhone.** Given only a description of the symptom, Claude diagnosed the root cause, found the Sony VAIO update package online, deobfuscated its XOR-inverted cabinet archive, reverse engineered the proprietary NCP protocol from the extracted DLL using [Ghidra](https://ghidra-sre.org/), and wrote the working Python script across multiple sessions. The story is below.
+
+---
+
+## Table of Contents
+
+- [The Problem](#the-problem)
+- [The Fix](#the-fix)
+- [The Full Story](#the-full-story)
+- [Usage](#usage)
+- [Files in This Repository](#files-in-this-repository)
+- [Credits](#credits)
+- [Related Issues](#related-issues)
+- [License](#license)
 
 ---
 
@@ -14,34 +27,6 @@ Surface Pro 3 units develop a **dead horizontal or vertical strip** on their tou
 
 A known trigger is the **Type Cover's magnetic attachment strip**: repeated contact of the keyboard cover's magnets with the screen edge can corrupt calibration data in the affected region. Multiple SP3 users report dead zones appearing specifically along the bottom edge after heavy Type Cover use.
 
-### How to confirm you have this issue
-
-```bash
-# Should show zero events when you touch the dead zone
-sudo evtest   # pick the N-Trig touchscreen device
-
-# Pen working in dead zone + touch dead = calibration drift (this tool fixes it)
-# Pen ALSO dead = hardware failure (this tool won't help)
-
-# If dead strip appears in the UEFI touch test (Volume Up + Power at boot),
-# it's definitely below OS level — calibration drift confirmed.
-```
-
----
-
-## Why iptsd / linux-surface won't help
-
-The Surface Pro 3 does **not** use Intel Precise Touch & Stylus (IPTS). That was introduced with the Surface Pro 4. The SP3 uses a completely different digitizer:
-
-| | Surface Pro 3 | Surface Pro 4+ |
-|---|---|---|
-| Digitizer | N-Trig DuoSense | Intel IPTS |
-| HID ID | `NTRG0001:01 1B96:1B05` | `045E:xxxx` via MEI |
-| Bus | I2C-HID (bus type 0x18) | MEI (Management Engine) |
-| Kernel driver | `hid-multitouch` (mainline) | `ipts` kernel module |
-| Userspace daemon | None needed | `iptsd` required |
-
-The SP3 touchscreen has worked out-of-the-box on mainline Linux since kernel 4.8 (2016). `iptsd` is completely irrelevant to it.
 
 ---
 
@@ -53,40 +38,11 @@ Running `CalibG4.exe` on Windows recalibrates the digitizer's firmware. Because 
 
 ---
 
-## Usage
-
-```bash
-# Requires root (hidraw access)
-sudo python3 ntrig_calib.py
-
-# Or explicitly specify the device
-sudo python3 ntrig_calib.py -d /dev/hidraw1
-```
-
-The script will:
-1. Find the N-Trig hidraw device automatically
-2. Send a calibration start command via the NCP protocol
-3. Poll for completion (up to ~5 seconds)
-4. Report success
-
-**After running, touch the previously-dead area.** It should respond immediately. No reboot required.
-
-> **Note on longevity:** A [2017 report from René Rebe](https://web.archive.org/web/20250324201828/https://rene.rebe.de/2017-07-29/n-trig-touch-screens-occasionally-need-re-calibration/) ([video](https://www.youtube.com/watch?v=mVX-7ZI8ysk)) noted that calibration may be temporary on some units — lasting only "a day, or a boot or two" before drift recurs. If the dead zone comes back, re-run the script. Frequent recurrence may indicate the digitizer hardware is physically degrading.
-
-### Requirements
-
-- Python 3.6+
-- Root privileges
-- The N-Trig device at `/dev/hidraw*` (verify with `lsusb -t` or `ls /dev/hidraw*`)
-- Kernel with `hid-multitouch` bound to `NTRG0001:01 1B96:1B05` (standard on Ubuntu 20.04+)
-
----
-
-## How It Works — The Full Story
+## The Full Story
 
 ### Background
 
-The entire process — from diagnosis to working script — was driven by Claude. The user described the symptom (dead touch strip, pen still working). Claude identified it as a known N-Trig firmware calibration issue solvable in software, located `CalibG4.exe` inside a Sony VAIO update package online, deobfuscated the XOR-inverted cabinet, reverse engineered the proprietary NCP protocol from the DLL, and wrote the Python script across multiple sessions. The user's role was describing the problem and testing the result.
+The entire process — from diagnosis to working script — was driven by Claude Opus 4.6 with extended thinking, running in the Claude mobile app on an iPhone. The user described the symptom (dead touch strip, pen still working). Claude identified it as a known N-Trig firmware calibration issue solvable in software, located `CalibG4.exe` inside a Sony VAIO update package online, deobfuscated the XOR-inverted cabinet, reverse engineered the proprietary NCP protocol from the DLL using [Ghidra](https://ghidra-sre.org/), and wrote the Python script across multiple sessions. The user's role was describing the problem and testing the result.
 
 The Windows fix (`CalibG4.exe`) communicates with the N-Trig digitizer via a proprietary binary protocol called **NCP (N-Trig Communication Protocol)**. The tool is distributed only as part of a Sony VAIO driver update package, and no documentation or Linux equivalent has ever existed publicly.
 
@@ -100,14 +56,14 @@ Extracting it isn't obvious: the wrapper embeds a cabinet file that is **XOR-inv
 
 ### Reverse engineering the DLL
 
-Claude then disassembled the DLL to understand exactly what bytes to send over the Linux hidraw interface.
+Claude then used [Ghidra](https://ghidra-sre.org/) to disassemble the DLL and understand exactly what bytes to send over the Linux hidraw interface.
 
 **Stage 1 — Initial analysis** revealed:
 - `CalibG4.exe` sends two NCP commands: `START_CALIB` (group=0x20, id=0x0A) and polls `GET_STATUS` (group=0x20, id=0x0B)
 - Status responses: `\x42\x42\x42` ("BBB") = complete, `\x63\x63\x63` ("ccc") = in progress, `\x21\x21\x21` ("!!!") = waiting
 - All actual communication goes through `NCPTransportInterface.dll`
 
-**Stage 2 — NCP frame format** (from disassembly of `0x18000D0D0`):
+**Stage 2 — NCP frame format** (from Ghidra disassembly of `0x18000D0D0`):
 
 ```
 Byte  0:     0x7E  — start marker
@@ -130,7 +86,7 @@ Raw I2C access also failed — unbinding the `i2c_hid_acpi` driver powers the de
 
 **Stage 4 — Deep DLL analysis (v4–v5, the breakthrough)**
 
-Claude disassembled the I2C transport class's vtable and traced the full call graph. The key discovery was a **fork in the send function** (`0x1800088C0`) based on a capability flag `[this+0x7c]`:
+Claude disassembled the I2C transport class's vtable in Ghidra and traced the full call graph. The key discovery was a **fork in the send function** (`0x1800088C0`) based on a capability flag `[this+0x7c]`:
 
 ```
 if [this+0x7c] != 0:
@@ -178,6 +134,35 @@ The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!
 
 ---
 
+## Usage
+
+```bash
+# Requires root (hidraw access)
+sudo python3 ntrig_calib.py
+
+# Or explicitly specify the device
+sudo python3 ntrig_calib.py -d /dev/hidraw1
+```
+
+The script will:
+1. Find the N-Trig hidraw device automatically
+2. Send a calibration start command via the NCP protocol
+3. Poll for completion (up to ~5 seconds)
+4. Report success
+
+**After running, touch the previously-dead area.** It should respond immediately. No reboot required.
+
+> **Note on longevity:** A [2017 report from René Rebe](https://web.archive.org/web/20250324201828/https://rene.rebe.de/2017-07-29/n-trig-touch-screens-occasionally-need-re-calibration/) ([video](https://www.youtube.com/watch?v=mVX-7ZI8ysk)) noted that calibration may be temporary on some units — lasting only "a day, or a boot or two" before drift recurs. If the dead zone comes back, re-run the script. Frequent recurrence may indicate the digitizer hardware is physically degrading.
+
+### Requirements
+
+- Python 3.6+
+- Root privileges
+- The N-Trig device at `/dev/hidraw*` (verify with `lsusb -t` or `ls /dev/hidraw*`)
+- Kernel with `hid-multitouch` bound to `NTRG0001:01 1B96:1B05` (standard on Ubuntu 20.04+)
+
+---
+
 ## Files in This Repository
 
 | File | Description |
@@ -200,7 +185,8 @@ ebf0168a60111d58f7709cfa8c7d129002cbdb192f253dddad6737122ddbdde7  CalibG4.exe
 
 ## Credits
 
-- **Diagnosis, reverse engineering, and script**: Done entirely by [Claude](https://claude.ai) (Anthropic). Given only a symptom description, Claude identified the calibration drift root cause, located the Sony VAIO update package online, deobfuscated the XOR-inverted cabinet, decompiled `NCPTransportInterface.dll`, traced the I2C transport vtable, decoded the NCP frame format and chunked protocol, identified the async receive path, and wrote the script. Multiple sessions, each building on the last.
+- **Diagnosis, reverse engineering, and script**: Done entirely by [Claude Opus 4.6](https://claude.ai) with extended thinking (Anthropic), via the Claude mobile app on an iPhone. Given only a symptom description, Claude identified the calibration drift root cause, located the Sony VAIO update package online, deobfuscated the XOR-inverted cabinet, decompiled `NCPTransportInterface.dll` using Ghidra, traced the I2C transport vtable, decoded the NCP frame format and chunked protocol, identified the async receive path, and wrote the script. Multiple sessions, each building on the last.
+- **Reverse engineering tooling**: [Ghidra](https://ghidra-sre.org/) — the open-source software reverse engineering framework developed by the **NSA Research Directorate**
 - **Original Windows tool**: `CalibG4.exe` by Sony/N-Trig, part of Sony VAIO Update package `EP0000601624.exe`
 - **Community discovery**: Many Surface Pro 3 users on [surfaceforums.net](https://www.surfaceforums.net), Microsoft Answers, and GitHub Issues who identified `CalibG4.exe` as the fix and kept the knowledge alive
 
