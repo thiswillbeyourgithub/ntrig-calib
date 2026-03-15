@@ -12,6 +12,8 @@ Surface Pro 3 units develop a **dead horizontal or vertical strip** on their tou
 
 **This is not a driver bug.** It is firmware-level calibration drift in the N-Trig DuoSense digitizer. The calibration data lives in the digitizer's own non-volatile memory and degrades over time, independently of the OS.
 
+A known trigger is the **Type Cover's magnetic attachment strip**: repeated contact of the keyboard cover's magnets with the screen edge can corrupt calibration data in the affected region. Multiple SP3 users report dead zones appearing specifically along the bottom edge after heavy Type Cover use.
+
 ### How to confirm you have this issue
 
 ```bash
@@ -68,6 +70,8 @@ The script will:
 4. Report success
 
 **After running, touch the previously-dead area.** It should respond immediately. No reboot required.
+
+> **Note on longevity:** A [2017 report from René Rebe](https://rene.rebe.de/2017-07-29/n-trig-touch-screens-occasionally-need-re-calibration/) noted that calibration may be temporary on some units — lasting only "a day, or a boot or two" before drift recurs. If the dead zone comes back, re-run the script. Frequent recurrence may indicate the digitizer hardware is physically degrading.
 
 ### Requirements
 
