@@ -81,11 +81,11 @@ Last byte:   Checksum = (-sum(signed_bytes)) & 0xFF
 
 The Linux-exposed HID report descriptor is **455 bytes** and defines **16 report IDs**: `0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x0A, 0x0B, 0x0C, 0x11, 0x15, 0x18, 0x1B, 0x58`. The "direct path" reports `0x29–0x35` mentioned in Stage 4 are physically absent from this descriptor — they live in separate HID collections (distinct PDOs in the Windows device tree) that Linux never exposes under `/dev/hidrawN`.
 
-Early attempts sent NCP frames via `HIDIOCG/SFEATURE` on report 0x1B (259 bytes, the largest vendor report in the descriptor). SET_FEATURE would succeed (kernel accepted it) but the device never responded. Reading 0x1B always returned the same static bytes regardless of what was written (`29 a9 19 9f 9a 19 a4 ...`), confirming it is a crypto/auth state register that silently ignores writes. Report 0x03 changed on every write, which looked promising but turned out to be just a HID transaction counter incrementing.
+Early attempts sent NCP frames via `HIDIOCG/SFEATURE` on report 0x1B (259 bytes, the largest vendor report in the descriptor). SET_FEATURE would succeed (kernel accepted it) but the device never responded. Reading 0x1B always returned the same static bytes regardless of what was written (`29 a9 19 9f 9a 19 a4 ...`), confirming it is a crypto/auth state register that silently ignores writes. This investigation was partly delayed by a bug in the diagnostic probe loop: it tested buffer sizes `[8, 16, 34, 65, 260, 514]` in order and stopped at 8 when reading 0x1B "succeeded" — meaning it never actually read the full 259-byte response, masking the fact that those bytes are always static. Report 0x03 changed on every write, which looked promising but turned out to be just a HID transaction counter incrementing.
 
 Raw I2C access also failed — unbinding the `i2c_hid_acpi` driver powers the device down, and it wouldn't respond to I2C commands afterward.
 
-**Stage 4 — Deep DLL analysis (v4–v5, the breakthrough)**
+**Stage 4 — Deep DLL analysis (v4–v5, the breakthrough at v5)**
 
 Claude disassembled the I2C transport class's vtable in Ghidra and traced the full call graph. The key discovery was a **fork in the send function** (`0x1800088C0`) based on a capability flag `[this+0x7c]`:
 
@@ -96,7 +96,7 @@ else:
     → DIRECT PATH: reports 0x29–0x2D (I2C direct) or 0x2E–0x35 (USB-HID)
 ```
 
-The flag `[this+0x7c]` is not set unconditionally — it is only activated after a **capability probe sequence** (function `0x1800095d0`) in which the DLL sends cmd_ids `0x01`, `0x0B`, `0x0C` to the device, and chunked mode is enabled only when the `0x0C` probe succeeds. The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to separate HID collections — distinct PDOs in the Windows HID device tree — which is why they don't appear as separate nodes under Linux's single `/dev/hidrawN` interface.
+The flag `[this+0x7c]` is not set unconditionally — it is only activated after a **capability probe sequence** (function `0x1800095d0`) in which the DLL compares capabilities against three probe configurations (cmd_ids `0x01`, `0x0B`, `0x0C`). On the SP3 running Windows one of these presumably succeeds and enables chunked mode; the Ghidra analysis strongly suggests `0x0C` is the triggering probe, though this was not directly confirmed on Linux. The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to separate HID collections — distinct PDOs in the Windows HID device tree — which is why they don't appear as separate nodes under Linux's single `/dev/hidrawN` interface.
 
 The chunked protocol (function `0x18000CC80`):
 ```
@@ -113,7 +113,7 @@ For a 15-byte NCP frame (no payload), this is a single 61-byte write:
 
 **Stage 5 — The async response**
 
-Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` and immediately captures the NCP response:
+Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` and immediately captures the NCP response on **report 0x06** (an empirical observation — the chat analysis identified 0x0B and 0x0C as candidate response reports, but responses actually arrived on 0x06; no deeper explanation was found):
 
 ```
 Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
@@ -123,7 +123,7 @@ Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
                                                                       payload = "!!!" = unknown/intermediate state
 ```
 
-The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state, not a confirmed trigger. The DLL continues polling after receiving it. The screen was fully fixed after the sequence completed.
+The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state, not a confirmed trigger. The DLL continues polling after receiving it. The screen was confirmed fully fixed in a subsequent session (the "it worked" moment is not captured in the analysis chat logs).
 
 **Full CalibG4 call sequence (from Ghidra):**
 - Read buffer: 4096 bytes
