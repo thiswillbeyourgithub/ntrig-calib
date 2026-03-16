@@ -2,6 +2,12 @@
 
 > **TL;DR:** The Surface Pro 3's N-Trig digitizer develops a dead rectangular strip over time due to firmware calibration drift. On Windows, Sony/N-Trig's `CalibG4.exe` fixes it in seconds. This repo contains a Python script that replicates what `CalibG4.exe` does — over Linux's `/dev/hidraw` interface — so you never need to boot Windows.
 
+### See it in action
+
+[![N-Trig touch screen re-calibration demo by René Rebe](https://img.youtube.com/vi/mVX-7ZI8ysk/0.jpg)](https://www.youtube.com/watch?v=mVX-7ZI8ysk)
+
+*Dead zone visible at the bottom edge — fixed by software recalibration (video by [René Rebe](https://rene.rebe.de/2017-07-29/n-trig-touch-screens-occasionally-need-re-calibration/))*
+
 **This tool was developed entirely by Claude Opus 4.6 with extended thinking (Anthropic's AI assistant), via the Claude mobile app on an iPhone.** Given only a description of the symptom, Claude diagnosed the root cause, found the Sony VAIO update package online, deobfuscated its XOR-inverted cabinet archive, reverse engineered the proprietary NCP protocol from the extracted DLL using [Ghidra](https://ghidra-sre.org/), and wrote the working Python script across multiple sessions. The story is below.
 
 ---
