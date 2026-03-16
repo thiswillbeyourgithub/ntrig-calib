@@ -12,7 +12,6 @@
 - [The Fix](#the-fix)
 - [The Full Story](#the-full-story)
 - [Usage](#usage)
-- [Files in This Repository](#files-in-this-repository)
 - [Credits](#credits)
 - [Related Issues](#related-issues)
 - [License](#license)
@@ -164,22 +163,6 @@ The script will:
 
 > **Note on longevity:** A [2017 report from René Rebe](https://web.archive.org/web/20250324201828/https://rene.rebe.de/2017-07-29/n-trig-touch-screens-occasionally-need-re-calibration/) ([video](https://www.youtube.com/watch?v=mVX-7ZI8ysk)) noted that calibration may be temporary on some units — lasting only "a day, or a boot or two" before drift recurs. If the dead zone comes back, re-run the script. Frequent recurrence may indicate the digitizer hardware is physically degrading.
 
-### Requirements
-
-- Python 3.6+
-- Root privileges
-- The N-Trig device at `/dev/hidraw*` (verify with `lsusb -t` or `ls /dev/hidraw*`)
-- Kernel with `hid-multitouch` bound to `NTRG0001:01 1B96:1B05` (standard on Ubuntu 20.04+)
-
----
-
-## Files in This Repository
-
-| File | Description |
-|---|---|
-| `ntrig_calib.py` | The Linux calibration script |
-| `README.md` | This file |
-
 ### CalibG4.exe and NCPTransportInterface.dll
 
 The Windows binaries (`CalibG4.exe` and `NCPTransportInterface.dll`) were extracted from [EP0000601624.zip](https://gartnertechnology.com/wp-content/uploads/2024/01/EP0000601624.zip) (also [saved by the Internet Archive](https://web.archive.org/web/20260315181048/https://gartnertechnology.com/wp-content/uploads/2024/01/EP0000601624.zip)). As long as these links are up, I don't want to republish these files. If you have trouble finding them, open an issue and I'll see if it's okay to send them to you or something.
@@ -190,6 +173,14 @@ The Windows binaries (`CalibG4.exe` and `NCPTransportInterface.dll`) were extrac
 89160d12677f2bd98f21db01651677d62dd0c242082bc9591edf41e330d7dd91  NCPTransportInterface.dll
 ebf0168a60111d58f7709cfa8c7d129002cbdb192f253dddad6737122ddbdde7  CalibG4.exe
 ```
+
+### Requirements
+
+- Python 3.6+
+- Root privileges
+- The N-Trig device at `/dev/hidraw*` (verify with `lsusb -t` or `ls /dev/hidraw*`)
+- Kernel with `hid-multitouch` bound to `NTRG0001:01 1B96:1B05` (standard on Ubuntu 20.04+)
+
 
 ---
 
