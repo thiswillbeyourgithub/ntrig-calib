@@ -72,7 +72,7 @@ Bytes 3-4:   Total frame size (LE uint16) = 14 + payload_len + 1
 Byte  5:     Flags: 0x01 = expects response, 0x41 = fire-and-forget
 Byte  6:     Command group (0x20 = calibration)
 Byte  7:     Command ID (0x0A = start, 0x0B = get status)
-Bytes 8-11:  Sequence number (LE uint32)
+Bytes 8-11:  Sequence number (LE uint32) — usually 0
 Bytes 12-13: Reserved (0x00)
 Bytes 14..:  Payload
 Last byte:   Checksum = (-sum(signed_bytes)) & 0xFF
@@ -80,7 +80,9 @@ Last byte:   Checksum = (-sum(signed_bytes)) & 0xFF
 
 **Stage 3 — The hidraw dead end (v1–v3)**
 
-Early attempts sent NCP frames via `HIDIOCG/SFEATURE` on report 0x1B (259 bytes, the largest vendor report in the descriptor). SET_FEATURE would succeed (kernel accepted it) but the device never responded. Report 0x03 changed on every write, which looked promising but turned out to be just a HID transaction counter incrementing.
+The Linux-exposed HID report descriptor is **455 bytes** and defines **16 report IDs**: `0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x0A, 0x0B, 0x0C, 0x11, 0x15, 0x18, 0x1B, 0x58`. The "direct path" reports `0x29–0x35` mentioned in Stage 4 are physically absent from this descriptor — they live in separate HID collections (distinct PDOs in the Windows device tree) that Linux never exposes under `/dev/hidrawN`.
+
+Early attempts sent NCP frames via `HIDIOCG/SFEATURE` on report 0x1B (259 bytes, the largest vendor report in the descriptor). SET_FEATURE would succeed (kernel accepted it) but the device never responded. Reading 0x1B always returned the same static bytes regardless of what was written (`29 a9 19 9f 9a 19 a4 ...`), confirming it is a crypto/auth state register that silently ignores writes. Report 0x03 changed on every write, which looked promising but turned out to be just a HID transaction counter incrementing.
 
 Raw I2C access also failed — unbinding the `i2c_hid_acpi` driver powers the device down, and it wouldn't respond to I2C commands afterward.
 
@@ -95,7 +97,7 @@ else:
     → DIRECT PATH: reports 0x29–0x2D (I2C direct) or 0x2E–0x35 (USB-HID)
 ```
 
-The flag `[this+0x7c]` is not set unconditionally — it is only activated after a **capability probe sequence** in which the DLL sends cmd_ids `0x01`, `0x0B`, `0x0C` to the device, and chunked mode is enabled only when the `0x0C` probe succeeds. The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to separate HID collections — distinct PDOs in the Windows HID device tree — which is why they don't appear as separate nodes under Linux's single `/dev/hidrawN` interface.
+The flag `[this+0x7c]` is not set unconditionally — it is only activated after a **capability probe sequence** (function `0x1800095d0`) in which the DLL sends cmd_ids `0x01`, `0x0B`, `0x0C` to the device, and chunked mode is enabled only when the `0x0C` probe succeeds. The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to separate HID collections — distinct PDOs in the Windows HID device tree — which is why they don't appear as separate nodes under Linux's single `/dev/hidrawN` interface.
 
 The chunked protocol (function `0x18000CC80`):
 ```
@@ -134,7 +136,7 @@ The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!
 
 | Approach | Why it failed |
 |---|---|
-| Sending NCP to report 0x1B | Wrong report. 0x1B is a crypto/auth state register, silently ignores writes. |
+| Sending NCP to report 0x1B | Wrong report. 0x1B is a crypto/auth state register — returns identical static bytes (`29 a9 19 9f 9a 19 a4 ...`) on every read and silently ignores writes. |
 | Raw I2C after unbinding driver | `i2c_hid_acpi` powers device down on unbind; EREMOTEIO on all commands. |
 | Polling GET_FEATURE for responses | The DLL uses async ReadFile, not GetFeature. Responses come as input reports. |
 | iptsd / linux-surface kernel | Completely wrong technology. SP3 doesn't use IPTS. |
