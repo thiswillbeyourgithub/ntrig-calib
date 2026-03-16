@@ -87,22 +87,34 @@ Last byte:   Checksum = (-sum(signed_bytes)) & 0xFF
 
 The Linux-exposed HID report descriptor is **455 bytes** and defines **16 report IDs**: `0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x0A, 0x0B, 0x0C, 0x11, 0x15, 0x18, 0x1B, 0x58`. The "direct path" reports `0x29–0x35` mentioned in Stage 4 are physically absent from this descriptor — they live in separate HID collections (distinct PDOs in the Windows device tree) that Linux never exposes under `/dev/hidrawN`.
 
-Early attempts sent NCP frames via `HIDIOCG/SFEATURE` on report 0x1B (259 bytes, the largest vendor report in the descriptor). SET_FEATURE would succeed (kernel accepted it) but the device never responded. Reading 0x1B always returned the same static bytes regardless of what was written (`29 a9 19 9f 9a 19 a4 ...`), confirming it is a crypto/auth state register that silently ignores writes. This investigation was partly delayed by a bug in the diagnostic probe loop: it tested buffer sizes `[8, 16, 34, 65, 260, 514]` in order and stopped at 8 when reading 0x1B "succeeded" — meaning it never actually read the full 259-byte response, masking the fact that those bytes are always static. Report 0x03 changed on every write, which looked promising but turned out to be just a HID transaction counter incrementing.
+Early attempts sent NCP frames via `HIDIOCG/SFEATURE` on report 0x1B (259 bytes, the largest vendor report in the descriptor). SET_FEATURE would succeed (kernel accepted it) but the device never responded. A bug in the diagnostic probe loop (it tested buffer sizes `[8, 16, 34, 65, 260, 514]` in order and stopped at the first "success") caused 0x1B reads to stop at 8 bytes, returning only the truncated prefix `29 a9 19 9f 9a 19 a4 ...` — never the full 259-byte response. With a correct 260-byte buffer, the response contains 256 non-zero bytes. Whether 0x1B truly "ignores writes" was never re-tested with the correct buffer; the conclusion is likely still correct (0x1B is not in the DLL's send path), but the original evidence was compromised by the buffer bug. Report 0x03 changed on every write, which looked promising but turned out to be just a HID transaction counter incrementing.
 
 Raw I2C access also failed — unbinding the `i2c_hid_acpi` driver powers the device down, and it wouldn't respond to I2C commands afterward.
 
+The kernel's `hid-ntrig.c` driver (sometimes mentioned in Surface forums) is irrelevant here: it includes `<linux/usb.h>`, calls `usb_control_msg()`, and matches only `HID_USB_DEVICE(...)` — it cannot bind to an I2C-HID device. On kernel 6.11+, [HID-BPF](https://docs.kernel.org/hid/hid-bpf.html) would be a cleaner alternative approach — it can inject initialization commands without unbinding any driver.
+
 **Stage 4 — Deep DLL analysis (v4–v5, the breakthrough at v5)**
 
-Claude disassembled the I2C transport class's vtable in Ghidra and traced the full call graph. The key discovery was a **fork in the send function** (`0x1800088C0`) based on a capability flag `[this+0x7c]`:
+Claude disassembled the I2C transport class's vtable in Ghidra and traced the full call graph. The DLL contains **two separate transport classes**, not alternative branches in one function:
 
-```
-if [this+0x7c] != 0:
-    → CHUNKED PATH: report 0x05, 61-byte chunks
-else:
-    → DIRECT PATH: reports 0x29–0x2D (I2C direct) or 0x2E–0x35 (USB-HID)
-```
+- **I2C transport** (`0x180008730`, object size `0xB8` bytes): send function `0x1800088C0` forks on capability flag `[this+0x7c]`:
+  ```
+  if [this+0x7c] != 0:
+      → CHUNKED PATH: report 0x05, 61-byte chunks
+  else:
+      → DIRECT PATH: size-based report ID (0x29–0x2D)
+  ```
+  The 8 extra bytes relative to the USB transport (at offsets `[this+0x70]`–`[this+0x7f]`) hold the chunked-path state, including the `[this+0x7c]` flag.
 
-The flag `[this+0x7c]` is not set unconditionally — it is only activated after a **capability probe sequence** (function `0x1800095d0`) in which the DLL compares capabilities against three probe configurations (cmd_ids `0x01`, `0x0B`, `0x0C`). On the SP3 running Windows one of these presumably succeeds and enables chunked mode; the Ghidra analysis strongly suggests `0x0C` is the triggering probe, though this was not directly confirmed on Linux. The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to separate HID collections — distinct PDOs in the Windows HID device tree — which is why they don't appear as separate nodes under Linux's single `/dev/hidrawN` interface.
+- **USB transport** (`0x180001280`, object size `0xB0` bytes): uses a separate size-based report ID table (0x2E–0x35). DLL dynamically loads `winusb.dll` at runtime, suggesting support for USB-attached N-Trig dongles in addition to I2C-HID.
+
+The I2C direct-path report IDs are chosen by a **size table** (function `0x1800011b0`): `<16B→0x29`, `<32B→0x2A`, `<63B→0x2B`, `<255B→0x2C`, `<511B→0x2D`. The USB table similarly: `≤17B→0x2E`, `≤33B→0x2F`, `≤64B→0x30`, `≤256B→0x31`, `≤512B→0x32`, `≤4096B→0x35`, `≤8192B→0x34`.
+
+The flag `[this+0x7c]` is only activated after a **capability probe sequence** (function `0x1800095d0`, which uses `SetupDi` enumeration + `HidP_GetCaps` and stores the result in `[this+0x30]`). The DLL probes against three configurations (cmd_ids `0x01`, `0x0B`, `0x0C`); on the SP3 running Windows one of these presumably succeeds and enables chunked mode. This was not confirmed on Linux.
+
+Report **0x05 is write-only**: `GET_FEATURE` on 0x05 returns no response — confirmed empirically by the diagnostic script.
+
+The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to **separate HID collections** — distinct PDOs in the Windows HID device tree. Windows HID minidrivers can inject additional HID collections (with those report IDs) into the descriptor before `HIDClass.sys` parses it, which is why those collection PDOs exist in the Windows device tree but are **absent from the firmware's native I2C-HID descriptor on Linux**. This is also why the Linux-exposed `/dev/hidrawN` device only shows the 16 base report IDs and never the 0x29–0x35 range.
 
 The chunked protocol (function `0x18000CC80`):
 ```
@@ -131,18 +143,23 @@ Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
 
 The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state, not a confirmed trigger. The DLL continues polling after receiving it. The screen was confirmed fully fixed in a subsequent session (the "it worked" moment is not captured in the analysis chat logs).
 
-**Full CalibG4 call sequence (from Ghidra):**
+**Full CalibG4 call sequence (from Ghidra, main sequence at `0x1400010B0`):**
 - Read buffer: 4096 bytes
 - `START_CALIB` timeout: 3000 ms
 - Status poll loop: up to 60 iterations × 500 ms = 30 seconds max
 - Explicit `DeInit` + `Deregister` cleanup at end
+- `Init` accepts an IP address and port (for remote calibration over a network — "Calib on local/remote machine" per PDB strings)
+
+VID/PID matching is **dynamic**: the caller passes VID/PID (or `-1` for "any") to the enumeration function at `0x180003078`. The DLL does not hardcode `0x1B96`.
+
+**Binary metadata:** PDB path `D:\Jenkins\workspace\G4_Host\Off_G4_Host_BUILD\Host_Win\H_Win_Tools\CalibG4\x64\Release\CalibG4.pdb`, version 1.0.0.12.
 
 ### Summary of failed approaches (for future reference)
 
 | Approach | Why it failed |
 |---|---|
-| Sending NCP to report 0x1B | Wrong report. 0x1B is a crypto/auth state register — returns identical static bytes (`29 a9 19 9f 9a 19 a4 ...`) on every read and silently ignores writes. |
-| Raw I2C after unbinding driver | `i2c_hid_acpi` powers device down on unbind; EREMOTEIO on all commands. |
+| Sending NCP to report 0x1B | Wrong report. 0x1B is not in the DLL's send path. A buffer-size bug (stopped at 8 bytes) made the read appear stable (`29 a9 19 9f ...`); the full 260-byte read was never retested. Still likely inert, but the evidence was compromised. |
+| Raw I2C after unbinding driver | `i2c_hid_acpi` (device at `INT33C3:00`, bus 1, slave 0x07) powers the device down on unbind; all subsequent I2C commands fail with `EREMOTEIO` (errno 121). |
 | Polling GET_FEATURE for responses | The DLL uses async ReadFile, not GetFeature. Responses come as input reports. |
 | iptsd / linux-surface kernel | Completely wrong technology. SP3 doesn't use IPTS. |
 | Report 0x03 changes as signal | It's a transaction counter, not an NCP response. |
