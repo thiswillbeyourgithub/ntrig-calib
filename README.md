@@ -85,9 +85,9 @@ Last byte:   Checksum = (-sum(signed_bytes)) & 0xFF
 
 **Stage 3 — The hidraw dead end (v1–v3)**
 
-The Linux-exposed HID report descriptor is **455 bytes** and defines **16 report IDs**: `0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x0A, 0x0B, 0x0C, 0x11, 0x15, 0x18, 0x1B, 0x58`. The "direct path" reports `0x29–0x35` mentioned in Stage 4 are physically absent from this descriptor — they live in separate HID collections (distinct PDOs in the Windows device tree) that Linux never exposes under `/dev/hidrawN`.
+The Linux-exposed HID report descriptor is **455 bytes** and defines **16 report IDs**: `0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x0A, 0x0B, 0x0C, 0x11, 0x15, 0x18, 0x1B, 0x58`. The "direct path" reports `0x29–0x35` mentioned in Stage 4 are physically absent from this descriptor — they are absent from the firmware's native I2C-HID descriptor (see Stage 4 for the precise explanation of why they appear in the Windows device tree but not on Linux).
 
-Early attempts sent NCP frames via `HIDIOCG/SFEATURE` on report 0x1B (259 bytes, the largest vendor report in the descriptor). SET_FEATURE would succeed (kernel accepted it) but the device never responded. A bug in the diagnostic probe loop (it tested buffer sizes `[8, 16, 34, 65, 260, 514]` in order and stopped at the first "success") caused 0x1B reads to stop at 8 bytes, returning only the truncated prefix `29 a9 19 9f 9a 19 a4 ...` — never the full 259-byte response. With a correct 260-byte buffer, the response contains 256 non-zero bytes. Whether 0x1B truly "ignores writes" was never re-tested with the correct buffer; the conclusion is likely still correct (0x1B is not in the DLL's send path), but the original evidence was compromised by the buffer bug. Report 0x03 changed on every write, which looked promising but turned out to be just a HID transaction counter incrementing.
+Early attempts sent NCP frames via `HIDIOCG/SFEATURE` on report 0x1B (259 bytes, the largest vendor report in the descriptor). SET_FEATURE would succeed (kernel accepted it) but the device never responded. A bug in the diagnostic probe loop (it tested buffer sizes `[8, 16, 34, 65, 260, 514]` in order and stopped at the first "success") caused 0x1B reads to stop at 8 bytes, returning only the truncated prefix `29 a9 19 9f 9a 19 a4 ...` — never the full 259-byte response. With a correct 260-byte buffer, the response contains 256 non-zero bytes. SET_FEATURE on 0x1B was re-tested in v4 with a correct 260-byte buffer and confirmed to only increment report 0x03 (the transaction counter), with no NCP response. The conclusion that 0x1B is not in the DLL's send path was later confirmed definitively by the Stage 4 DLL analysis. Report 0x03 changed on every write, which looked promising but turned out to be just a HID transaction counter incrementing.
 
 Raw I2C access also failed — unbinding the `i2c_hid_acpi` driver powers the device down, and it wouldn't respond to I2C commands afterward.
 
@@ -110,11 +110,11 @@ Claude disassembled the I2C transport class's vtable in Ghidra and traced the fu
 
 The I2C direct-path report IDs are chosen by a **size table** (function `0x1800011b0`): `<16B→0x29`, `<32B→0x2A`, `<63B→0x2B`, `<255B→0x2C`, `<511B→0x2D`. The USB table similarly: `≤17B→0x2E`, `≤33B→0x2F`, `≤64B→0x30`, `≤256B→0x31`, `≤512B→0x32`, `≤4096B→0x35`, `≤8192B→0x34`.
 
-The flag `[this+0x7c]` is only activated after a **capability probe sequence** (function `0x1800095d0`, which uses `SetupDi` enumeration + `HidP_GetCaps` and stores the result in `[this+0x30]`). The DLL probes against three configurations (cmd_ids `0x01`, `0x0B`, `0x0C`); on the SP3 running Windows one of these presumably succeeds and enables chunked mode. This was not confirmed on Linux.
+The flag `[this+0x7c]` is only activated after a **capability probe sequence** (function `0x1800095d0`, which uses `SetupDi` enumeration + `HidP_GetCaps` and stores the result in `[this+0x30]`). The DLL probes against three configurations (cmd_ids `0x01`, `0x0B`, `0x0C`); on the SP3 running Windows the `0x0C` probe presumably succeeds and enables chunked mode. This was not confirmed on Linux.
 
 Report **0x05 is write-only**: `GET_FEATURE` on 0x05 returns no response — confirmed empirically by the diagnostic script.
 
-The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to **separate HID collections** — distinct PDOs in the Windows HID device tree. Windows HID minidrivers can inject additional HID collections (with those report IDs) into the descriptor before `HIDClass.sys` parses it, which is why those collection PDOs exist in the Windows device tree but are **absent from the firmware's native I2C-HID descriptor on Linux**. This is also why the Linux-exposed `/dev/hidrawN` device only shows the 16 base report IDs and never the 0x29–0x35 range.
+The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to **separate HID collections** — distinct PDOs in the Windows HID device tree. Windows HID minidrivers can inject additional HID collections (with those report IDs) into the descriptor before `HIDClass.sys` parses it, which is why those collection PDOs exist in the Windows device tree but are **absent from the firmware's native I2C-HID descriptor on Linux**. This is also why the Linux-exposed `/dev/hidrawN` device only shows the 16 base report IDs and never the 0x29–0x35 range. The v5 diagnostic script probed these report IDs directly on the device and received no response, empirically confirming their absence.
 
 The chunked protocol (function `0x18000CC80`):
 ```
@@ -131,7 +131,7 @@ For a 15-byte NCP frame (no payload), this is a single 61-byte write:
 
 **Stage 5 — The async response**
 
-Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` and immediately captures the NCP response on **report 0x06** (an empirical observation — the chat analysis identified 0x0B and 0x0C as candidate response reports, but responses actually arrived on 0x06; no deeper explanation was found):
+Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` and immediately captures the NCP response on **report 0x06** (an empirical observation from a subsequent session whose logs are **not** included in this repository — the chat analysis identified 0x0B and 0x0C as candidate response reports, but in that later session responses actually arrived on 0x06; no deeper explanation was found):
 
 ```
 Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
@@ -141,7 +141,7 @@ Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
                                                                       payload = "!!!" = unknown/intermediate state
 ```
 
-The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state, not a confirmed trigger. The DLL continues polling after receiving it. The screen was confirmed fully fixed in a subsequent session (the "it worked" moment is not captured in the analysis chat logs).
+The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state, not a confirmed trigger. The DLL continues polling after receiving it. The screen was confirmed fully fixed in that same subsequent session (the "it worked" moment, and all 0x06 response captures, come from a session whose logs are not present in this repository).
 
 **Full CalibG4 call sequence (from Ghidra, main sequence at `0x1400010B0`):**
 - Read buffer: 4096 bytes
@@ -158,7 +158,7 @@ VID/PID matching is **dynamic**: the caller passes VID/PID (or `-1` for "any") t
 
 | Approach | Why it failed |
 |---|---|
-| Sending NCP to report 0x1B | Wrong report. 0x1B is not in the DLL's send path. A buffer-size bug (stopped at 8 bytes) made the read appear stable (`29 a9 19 9f ...`); the full 260-byte read was never retested. Still likely inert, but the evidence was compromised. |
+| Sending NCP to report 0x1B | Wrong report. 0x1B was believed to be the NCP channel through v4 — ruled out only by the Stage 4 deep DLL vtable analysis (v5). A buffer-size bug (stopped at 8 bytes) made the read appear stable (`29 a9 19 9f ...`); retested at 260 bytes in v4: returns 256 non-zero bytes of static device state data, confirmed not an NCP response. |
 | Raw I2C after unbinding driver | `i2c_hid_acpi` (device at `INT33C3:00`, bus 1, slave 0x07) powers the device down on unbind; all subsequent I2C commands fail with `EREMOTEIO` (errno 121). |
 | Polling GET_FEATURE for responses | The DLL uses async ReadFile, not GetFeature. Responses come as input reports. |
 | iptsd / linux-surface kernel | Completely wrong technology. SP3 doesn't use IPTS. |
@@ -170,17 +170,24 @@ VID/PID matching is **dynamic**: the caller passes VID/PID (or `-1` for "any") t
 
 ```bash
 # Requires root (hidraw access)
-sudo python3 ntrig_calib.py
-
-# Or explicitly specify the device
-sudo python3 ntrig_calib.py -d /dev/hidraw1
+sudo python3 ntrig_calib.py                  # run full diagnostics (default)
+sudo python3 ntrig_calib.py --diag           # same as above, explicit
+sudo python3 ntrig_calib.py --calibrate      # send START_CALIB only
+sudo python3 ntrig_calib.py --list           # list all N-Trig hidraw devices
+sudo python3 ntrig_calib.py -d /dev/hidraw1  # specify device explicitly
+sudo python3 ntrig_calib.py --module-id 0x0002  # override NCP module ID (default: 0x0001)
 ```
 
-The script will:
-1. Find the N-Trig hidraw device automatically
-2. Send a calibration start command via the NCP protocol
-3. Poll for completion (up to ~5 seconds)
-4. Report success
+**By default (and with `--diag`), the script runs diagnostics**, not a silent calibration. It will:
+1. Auto-detect the N-Trig hidraw device (or use `-d`)
+2. Parse and print the HID report descriptor
+3. Take a baseline GET_FEATURE snapshot of all reports
+4. Probe undeclared reports 0x29–0x2D (the I2C NCP channel per DLL analysis)
+5. Send NCP GET_STATUS and START_CALIB via the chunked report 0x05 protocol
+6. Attempt direct (non-chunked) NCP via report 0x05
+7. Try async input report reads after each send, looking for NCP responses
+
+Use `--calibrate` to send only the START_CALIB command, skipping the diagnostic probing — recommended once you have confirmed from a `--diag` run that the NCP channel is responding.
 
 **After running, touch the previously-dead area.** It should respond immediately. No reboot required.
 
@@ -201,8 +208,8 @@ ebf0168a60111d58f7709cfa8c7d129002cbdb192f253dddad6737122ddbdde7  CalibG4.exe
 
 - Python 3.6+
 - Root privileges
-- The N-Trig device at `/dev/hidraw*` (verify with `lsusb -t` or `ls /dev/hidraw*`)
-- Kernel with `hid-multitouch` bound to `NTRG0001:01 1B96:1B05` (standard on Ubuntu 20.04+)
+- The N-Trig device at `/dev/hidraw*` (verify with `dmesg | grep -i "NTRG\|1B96\|multitouch"` or `ls /dev/hidraw*`)
+- Kernel with `hid-multitouch` bound to `NTRG0001:01 1B96:1B05` (standard on any Linux distribution with kernel 4.8 or later)
 
 
 ---
