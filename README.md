@@ -1,6 +1,6 @@
 # ntrig-calib — Surface Pro 3 Touchscreen Dead Zone Fix (Linux)
 
-> **TL;DR:** The Surface Pro 3's N-Trig digitizer develops a dead rectangular strip over time due to firmware calibration drift. On Windows, Sony/N-Trig's `CalibG4.exe` fixes it in seconds. This repo contains a Python script that replicates what `CalibG4.exe` does — over Linux's `/dev/hidraw` interface — so you never need to boot Windows.
+> **TL;DR:** My first personal Claude aha moment. Bought a second-hand Microsoft Surface Pro 3, but the touchscreen was dead. Asked Claude for help. Claude diagnosed the firmware calibration issue, found the Windows fix (`CalibG4.exe`) online, deobfuscated the binary, reverse-engineered it with Ghidra, decoded the proprietary protocol, and wrote a working Python script — all without ever booting Windows. It fucking worked.
 
 ### See it in action
 
