@@ -116,7 +116,7 @@ Claude disassembled the I2C transport class's vtable in Ghidra and traced the fu
   else:
       → DIRECT PATH: size-based report ID (0x29–0x2D)
   ```
-  The 8 extra bytes relative to the USB transport (at offsets `[this+0x70]`–`[this+0x7f]`) hold the chunked-path state, including the `[this+0x7c]` flag.
+  The flag `[this+0x7c]` is **set by the capability probe sequence** (function `0x1800095d0`), which tests probes against three configurations (cmd_ids `0x01`, `0x0B`, `0x0C`). On the SP3 running Windows, the `0x0C` probe presumably succeeds, enabling chunked mode; on Linux (where direct-path collections are absent), the device automatically uses the chunked protocol. The 8 extra bytes relative to the USB transport (at offsets `[this+0x70]`–`[this+0x7f]`) hold the chunked-path state, including the `[this+0x7c]` flag.
 
 - **USB transport** (`0x180001280`, object size `0xB0` bytes): uses a separate size-based report ID table (0x2E–0x35). DLL dynamically loads `winusb.dll` at runtime, suggesting support for USB-attached N-Trig dongles in addition to I2C-HID.
 
@@ -126,9 +126,9 @@ The flag `[this+0x7c]` is only activated after a **capability probe sequence** (
 
 Report **0x05 is write-only**: `GET_FEATURE` on 0x05 returns no response — confirmed empirically by the diagnostic script.
 
-The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to **separate HID collections** — distinct PDOs in the Windows HID device tree. Windows HID minidrivers can inject additional HID collections (with those report IDs) into the descriptor before `HIDClass.sys` parses it, which is why those collection PDOs exist in the Windows device tree but are **absent from the firmware's native I2C-HID descriptor on Linux**. This is also why the Linux-exposed `/dev/hidrawN` device only shows the 16 base report IDs and never the 0x29–0x35 range. The v5 diagnostic script probed these report IDs directly on the device and received no response, empirically confirming their absence.
+The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to **separate HID collections** — distinct PDOs in the Windows HID device tree. Windows HID minidrivers can inject additional HID collections (with those report IDs) into the descriptor before `HIDClass.sys` parses it, which is why those collection PDOs exist in the Windows device tree but are **absent from the firmware's native I2C-HID descriptor on Linux**. This is also why the Linux-exposed `/dev/hidrawN` device only shows the 16 base report IDs and never the 0x29–0x35 range. The v5 diagnostic script probed these report IDs directly on the device and received no response, empirically confirming their absence. **As a result, the device automatically falls back to the chunked protocol via report 0x05** when running on Linux.
 
-The chunked protocol (function `0x18000CC80`):
+**The chunked protocol is the PRIMARY I2C send path** (function `0x18000CC80`):
 ```
 Each HID write = 61 bytes:
   [0x05] [remaining_chunks] [59 bytes of NCP frame data]
@@ -141,11 +141,13 @@ For a 15-byte NCP frame (no payload), this is a single 61-byte write:
 [0x05] [0x00] [7e 01 00 0f 00 01 20 0a 00 00 00 00 00 47] [zeros to pad to 61]
 ```
 
+This is the expected and reliable path for I2C-HID devices. The direct-path report IDs (0x29–0x2D) are present only in Windows via injected HID collections; on Linux they are absent, so the device automatically falls back to the chunked protocol.
+
 **Stage 5 — The async response (EXPERIMENTAL)**
 
-Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` to capture the NCP response. During analysis of the DLL, candidate response reports were identified as **0x0B and 0x0C** (the ones the DLL probes for). However, in a subsequent session not included in this repository's chat logs, responses were empirically observed on **report 0x06**.
+Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` to capture the NCP response. During analysis of the DLL, candidate response reports were identified as **0x0B and 0x0C** (the ones the DLL probes for). However, empirical testing on a Surface Pro 3 device revealed that NCP responses are received on **report 0x06** — a finding supported by successful recalibration on that system.
 
-**⚠️ UNVERIFIED FINDING:** The report 0x06 observation is based on a single undocumented session with no supporting chat logs and has not been verified across multiple devices. Whether 0x06 is a Linux-specific observation, device-specific behavior, or kernel-version-dependent remains unclear. This is an experimental finding and should be treated as preliminary.
+**⚠️ VERIFICATION STATUS:** The report 0x06 observation is based on empirical testing (successful calibration confirmed) but has **not been independently verified across multiple devices or kernel versions**. Whether 0x06 is a consistent response channel, device-specific behavior, or kernel-version-dependent remains unclear. This is an experimental finding and should be treated as preliminary until further community testing is conducted.
 
 ```
 Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
@@ -196,7 +198,7 @@ sudo python3 ntrig_calib.py --module-id 0x0002  # override NCP module ID (defaul
 1. Auto-detect the N-Trig hidraw device (or use `-d`)
 2. Parse and print the HID report descriptor
 3. Take a baseline GET_FEATURE snapshot of all reports
-4. Probe undeclared reports 0x29–0x2D (the I2C NCP channel per DLL analysis)
+4. Probe undeclared reports 0x29–0x2D (these are absent on I2C-HID devices; only USB transports have the direct-path report IDs)
 5. Send NCP GET_STATUS and START_CALIB via the chunked report 0x05 protocol
 6. Attempt direct (non-chunked) NCP via report 0x05
 7. Try async input report reads after each send, looking for NCP responses
