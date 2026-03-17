@@ -122,11 +122,17 @@ Claude disassembled the I2C transport class's vtable in Ghidra and traced the fu
 
 The I2C direct-path report IDs are chosen by a **size table** (function `0x1800011b0`): `<16B→0x29`, `<32B→0x2A`, `<63B→0x2B`, `<255B→0x2C`, `<511B→0x2D`. The USB table similarly: `≤17B→0x2E`, `≤33B→0x2F`, `≤64B→0x30`, `≤256B→0x31`, `≤512B→0x32`, `≤4096B→0x35`, `≤8192B→0x34`.
 
-The flag `[this+0x7c]` is only activated after a **capability probe sequence** (function `0x1800095d0`, which uses `SetupDi` enumeration + `HidP_GetCaps` and stores the result in `[this+0x30]`). The DLL probes against three configurations (cmd_ids `0x01`, `0x0B`, `0x0C`); on the SP3 running Windows the `0x0C` probe presumably succeeds and enables chunked mode. This capability probe identifies the transport type but does not directly control which report ID carries the async responses—that mapping remains not fully understood on Linux.
+The flag `[this+0x7c]` is set by the **capability probe sequence** (function `0x1800095d0`, which uses `SetupDi` enumeration + `HidP_GetCaps` and stores the result in `[this+0x30]`). The DLL probes against three configurations (cmd_ids `0x01`, `0x0B`, `0x0C`):
+- On Windows, the `0x0C` probe presumably succeeds, and the flag `[this+0x7c]` is set to enable chunked mode.
+- On Linux, those direct-path report IDs do not exist (see below), so the probe fails, the flag remains unset, and the DLL defaults to chunked protocol.
+
+This is **software-driven fallback logic**, not automatic hardware behavior. The fallback occurs because the **capability probe fails to detect direct-path support on Linux**, triggering the DLL's code path decision at the flag level.
 
 Report **0x05 is write-only**: `GET_FEATURE` on 0x05 returns no response — confirmed empirically by the diagnostic script.
 
-The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to **separate HID collections** — distinct PDOs in the Windows HID device tree. Windows HID minidrivers can inject additional HID collections (with those report IDs) into the descriptor before `HIDClass.sys` parses it, which is why those collection PDOs exist in the Windows device tree but are **absent from the firmware's native I2C-HID descriptor on Linux**. This is also why the Linux-exposed `/dev/hidrawN` device only shows the 16 base report IDs and never the 0x29–0x35 range. The v5 diagnostic script probed these report IDs directly on the device and received no response, empirically confirming their absence. **As a result, the device automatically falls back to the chunked protocol via report 0x05** when running on Linux.
+The "direct path" reports (0x29–0x2D for I2C, 0x2E–0x35 for USB-HID) map to **separate HID collections** — distinct PDOs in the Windows HID device tree. Windows HID minidrivers can inject additional HID collections (with those report IDs) into the descriptor before `HIDClass.sys` parses it, which is why those collection PDOs exist in the Windows device tree but are **absent from the firmware's native I2C-HID descriptor on Linux**. This is also why the Linux-exposed `/dev/hidrawN` device only shows the 16 base report IDs and never the 0x29–0x35 range. The v5 diagnostic script probed these report IDs directly on the device and received no response, empirically confirming their absence.
+
+**When the DLL's capability probe (function `0x1800095d0`) fails to detect these direct-path report IDs on Linux**, it sets the fallback flag `[this+0x7c]`, causing the send function (`0x1800088C0`) to use the chunked protocol via report 0x05 instead. This is the DLL's deliberate software response to missing capabilities, not a hardware-level automatic behavior. **As a result, on Linux the DLL falls back to the chunked protocol via report 0x05** — a probe-driven decision, not automatic hardware automation.
 
 **The chunked protocol is the PRIMARY I2C send path** (function `0x18000CC80`):
 ```
@@ -145,11 +151,20 @@ This is the expected and reliable path for I2C-HID devices. The direct-path repo
 
 **Stage 5 — The async response (EXPERIMENTAL)**
 
-Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` to capture the NCP response. During analysis of the DLL, candidate response reports were identified as **0x0B and 0x0C** (the ones the DLL probes for). However, empirical testing on a Surface Pro 3 device revealed that NCP responses are received on **report 0x06** — a finding supported by successful recalibration on that system.
+Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` to capture the NCP response.
 
-**⚠️ VERIFICATION STATUS:** The report 0x06 observation is based on empirical testing (successful calibration confirmed) but has **not been independently verified across multiple devices or kernel versions**. Whether 0x06 is a consistent response channel, device-specific behavior, or kernel-version-dependent remains unclear. This is an experimental finding and should be treated as preliminary until further community testing is conducted.
+During DLL analysis, the capability probe sequence (function `0x1800095d0`) identifies three probe configurations with cmd_ids **0x01, 0x0B, and 0x0C**. Based on this analysis and the DLL's feature detection logic, **0x0B and 0x0C emerged as candidate response channels** from the reverse-engineered code structure.
+
+However, empirical testing on a single Surface Pro 3 device revealed that NCP responses were actually received on **report 0x06** in an undocumented testing session — a finding that resulted in successful recalibration on that system. This observation is **not supported by chat-based reverse engineering evidence** and comes from a single unlogged session.
+
+**⚠️ CRITICAL DISTINCTION — Verified candidates vs. unverified observation:**
+- **0x0B and 0x0C** are candidate response channels **identified from structured DLL analysis** (the capability probes). These are the most likely based on the reverse-engineered code.
+- **0x06** is an **empirical observation from a single undocumented session only**. It has **NOT been independently verified** across multiple devices, kernel versions, or configurations, and lacks supporting chat-based evidence. **Do not rely on 0x06 as the definitive response channel.** The actual response channel on your device may be 0x0B, 0x0C, or something else entirely.
+
+If you run the script and it works on your system, the response channel it detected is what works for your configuration. If you run the script and it fails or reports no responses, the response channel may differ on your kernel version or device variant.
 
 ```
+Observed example from undocumented session (report 0x06):
 Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
                    ^^                    ^^
                    NCP marker            cmd_group=0x20, cmd_id=0x0B (GET_STATUS response)
@@ -157,7 +172,9 @@ Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
                                                                       payload = "!!!" = unknown/intermediate state
 ```
 
-The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state. The DLL continues polling after receiving it. In the undocumented session where 0x06 was observed, the screen was confirmed fully fixed, but without verifiable logs, the exact mechanism of success cannot be independently confirmed here. Further testing on additional Surface Pro 3 units is needed to establish whether 0x06 is a consistent response channel or a device-specific or kernel-version-dependent behavior.
+The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state. The DLL continues polling after receiving it.
+
+**Further testing on additional Surface Pro 3 units is critical** to establish whether 0x06 is a reliable response channel, whether the actual channel is 0x0B or 0x0C (the reverse-engineered candidates), or whether it is device-specific or kernel-version-dependent behavior. Community verification will clarify this ambiguity.
 
 **Full CalibG4 call sequence (from Ghidra, main sequence at `0x1400010B0`):**
 - Read buffer: 4096 bytes
