@@ -8,7 +8,7 @@
 
 *Dead zone visible at the bottom edge — fixed by software recalibration (video by [René Rebe](https://rene.rebe.de/2017-07-29/n-trig-touch-screens-occasionally-need-re-calibration/))*
 
-**This tool was developed entirely by Claude Opus 4.6 with extended thinking (Anthropic's AI assistant), via the Claude mobile app on an iPhone.** Given only a description of the symptom, Claude diagnosed the root cause, found the Sony VAIO update package online, deobfuscated its XOR-inverted cabinet archive, reverse engineered the proprietary NCP protocol from the extracted DLL using [Ghidra](https://ghidra-sre.org/), and wrote the working Python script across multiple sessions. The story is below.
+**This tool was developed by Claude Opus 4.6 with extended thinking (Anthropic's AI assistant).** Given only a description of the symptom, Claude diagnosed the root cause, found the Sony VAIO update package online, deobfuscated its XOR-inverted cabinet archive, reverse engineered the proprietary NCP protocol from the extracted DLL using [Ghidra](https://ghidra-sre.org/), and wrote the working Python script across multiple sessions. Subsequent improvements and documentation updates may use different Claude models. The story is below.
 
 ---
 
@@ -47,7 +47,7 @@ Running `CalibG4.exe` on Windows recalibrates the digitizer's firmware. Because 
 
 ### Background
 
-The entire process — from diagnosis to working script — was driven by Claude Opus 4.6 with extended thinking, running in the Claude mobile app on an iPhone. The user described the symptom (dead touch strip, pen still working). Claude identified it as a known N-Trig firmware calibration issue solvable in software, located `CalibG4.exe` inside a Sony VAIO update package online, deobfuscated the XOR-inverted cabinet, reverse engineered the proprietary NCP protocol from the DLL using [Ghidra](https://ghidra-sre.org/), and wrote the Python script across multiple sessions. The user's role was describing the problem and testing the result.
+The entire process — from diagnosis to working script — was driven by Claude Opus 4.6 with extended thinking. The user described the symptom (dead touch strip, pen still working). Claude identified it as a known N-Trig firmware calibration issue solvable in software, located `CalibG4.exe` inside a Sony VAIO update package online, deobfuscated the XOR-inverted cabinet, reverse engineered the proprietary NCP protocol from the DLL using [Ghidra](https://ghidra-sre.org/), and wrote the Python script across multiple sessions. The user's role was describing the problem and testing the result. Subsequent improvements to the script or documentation may involve other Claude models.
 
 The Windows fix (`CalibG4.exe`) communicates with the N-Trig digitizer via a proprietary binary protocol called **NCP (N-Trig Communication Protocol)**. The tool is distributed only as part of a Sony VAIO driver update package, and no documentation or Linux equivalent has ever existed publicly.
 
@@ -110,7 +110,7 @@ Claude disassembled the I2C transport class's vtable in Ghidra and traced the fu
 
 The I2C direct-path report IDs are chosen by a **size table** (function `0x1800011b0`): `<16B→0x29`, `<32B→0x2A`, `<63B→0x2B`, `<255B→0x2C`, `<511B→0x2D`. The USB table similarly: `≤17B→0x2E`, `≤33B→0x2F`, `≤64B→0x30`, `≤256B→0x31`, `≤512B→0x32`, `≤4096B→0x35`, `≤8192B→0x34`.
 
-The flag `[this+0x7c]` is only activated after a **capability probe sequence** (function `0x1800095d0`, which uses `SetupDi` enumeration + `HidP_GetCaps` and stores the result in `[this+0x30]`). The DLL probes against three configurations (cmd_ids `0x01`, `0x0B`, `0x0C`); on the SP3 running Windows the `0x0C` probe presumably succeeds and enables chunked mode. This was not confirmed on Linux.
+The flag `[this+0x7c]` is only activated after a **capability probe sequence** (function `0x1800095d0`, which uses `SetupDi` enumeration + `HidP_GetCaps` and stores the result in `[this+0x30]`). The DLL probes against three configurations (cmd_ids `0x01`, `0x0B`, `0x0C`); on the SP3 running Windows the `0x0C` probe presumably succeeds and enables chunked mode. This capability probe identifies the transport type but does not directly control which report ID carries the async responses—that mapping remains not fully understood on Linux.
 
 Report **0x05 is write-only**: `GET_FEATURE` on 0x05 returns no response — confirmed empirically by the diagnostic script.
 
@@ -131,7 +131,7 @@ For a 15-byte NCP frame (no payload), this is a single 61-byte write:
 
 **Stage 5 — The async response**
 
-Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` and immediately captures the NCP response on **report 0x06** (an empirical observation from a subsequent session whose logs are **not** included in this repository — the chat analysis identified 0x0B and 0x0C as candidate response reports, but in that later session responses actually arrived on 0x06; no deeper explanation was found):
+Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` to capture the NCP response. During analysis of the DLL, candidate response reports were identified as **0x0B and 0x0C** (the ones the DLL probes for). However, in a subsequent session not included in this repository's chat logs, responses were empirically observed on **report 0x06**. Whether 0x06 is a Linux-specific observation, device-specific behavior, or kernel-version-dependent remains unclear—this critical finding came from an undocumented session and needs verification across multiple devices:
 
 ```
 Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
@@ -141,7 +141,7 @@ Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
                                                                       payload = "!!!" = unknown/intermediate state
 ```
 
-The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state, not a confirmed trigger. The DLL continues polling after receiving it. The screen was confirmed fully fixed in that same subsequent session (the "it worked" moment, and all 0x06 response captures, come from a session whose logs are not present in this repository).
+The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state, not a confirmed trigger. The DLL continues polling after receiving it. The screen was confirmed fully fixed in that same subsequent session, but that session's logs are not present in this repository, so the exact mechanism of success is incompletely documented here. To understand whether the 0x06 response channel is consistent across devices or a one-time observation, further testing on additional Surface Pro 3 units would be valuable.
 
 **Full CalibG4 call sequence (from Ghidra, main sequence at `0x1400010B0`):**
 - Read buffer: 4096 bytes
@@ -187,7 +187,7 @@ sudo python3 ntrig_calib.py --module-id 0x0002  # override NCP module ID (defaul
 6. Attempt direct (non-chunked) NCP via report 0x05
 7. Try async input report reads after each send, looking for NCP responses
 
-Use `--calibrate` to send only the START_CALIB command, skipping the diagnostic probing — recommended once you have confirmed from a `--diag` run that the NCP channel is responding.
+Use `--calibrate` to send only the START_CALIB command, skipping the diagnostic probing — recommended once you have confirmed from a `--diag` run that the NCP channel is responding. **Important:** The response channel confirmation in this script is based on empirical observations from an undocumented session. Your kernel version or device configuration may differ; always verify with `--diag` first to ensure the NCP channel is responding on your system before running `--calibrate`.
 
 **After running, touch the previously-dead area.** It should respond immediately. No reboot required.
 
@@ -216,7 +216,7 @@ ebf0168a60111d58f7709cfa8c7d129002cbdb192f253dddad6737122ddbdde7  CalibG4.exe
 
 ## Credits
 
-- **Diagnosis, reverse engineering, and script**: Done entirely by [Claude Opus 4.6](https://claude.ai) with extended thinking (Anthropic), via the Claude mobile app on an iPhone. Given only a symptom description, Claude identified the calibration drift root cause, located the Sony VAIO update package online, deobfuscated the XOR-inverted cabinet, decompiled `NCPTransportInterface.dll` using Ghidra, traced the I2C transport vtable, decoded the NCP frame format and chunked protocol, identified the async receive path, and wrote the script. Multiple sessions, each building on the last.
+- **Diagnosis, reverse engineering, and script**: Done primarily by [Claude Opus 4.6](https://claude.ai) with extended thinking (Anthropic). Given only a symptom description, Claude identified the calibration drift root cause, located the Sony VAIO update package online, deobfuscated the XOR-inverted cabinet, decompiled `NCPTransportInterface.dll` using Ghidra, traced the I2C transport vtable, decoded the NCP frame format and chunked protocol, identified the async receive path, and wrote the script. Subsequent improvements and documentation refinements may involve other Claude models.
 - **Reverse engineering tooling**: [Ghidra](https://ghidra-sre.org/) — the open-source software reverse engineering framework developed by the **NSA Research Directorate**
 - **Original Windows tool**: `CalibG4.exe` by Sony/N-Trig, part of Sony VAIO Update package `EP0000601624.exe`
 - **Community discovery**: Many Surface Pro 3 users on [surfaceforums.net](https://www.surfaceforums.net), Microsoft Answers, and GitHub Issues who identified `CalibG4.exe` as the fix and kept the knowledge alive
