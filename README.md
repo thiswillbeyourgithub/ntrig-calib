@@ -255,6 +255,7 @@ ebf0168a60111d58f7709cfa8c7d129002cbdb192f253dddad6737122ddbdde7  CalibG4.exe
 - **Reverse engineering tooling**: [Ghidra](https://ghidra-sre.org/) — the open-source software reverse engineering framework developed by the **NSA Research Directorate**
 - **Original Windows tool**: `CalibG4.exe` by Sony/N-Trig, part of Sony VAIO Update package `EP0000601624.exe`
 - **Community discovery**: Many Surface Pro 3 users on [surfaceforums.net](https://www.surfaceforums.net), Microsoft Answers, and GitHub Issues who identified `CalibG4.exe` as the fix and kept the knowledge alive
+- **Full conversation history**: HTML copies of the entire chat sessions are available upon request via the contact page for those interested in following the step-by-step reasoning and reverse engineering process.
 
 ---
 
