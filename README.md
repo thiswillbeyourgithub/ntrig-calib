@@ -15,6 +15,7 @@
 ## Table of Contents
 
 - [The Problem](#the-problem)
+- [Known Limitations and Unknowns](#known-limitations-and-unknowns)
 - [The Fix](#the-fix)
 - [The Full Story](#the-full-story)
 - [Usage](#usage)
@@ -32,6 +33,17 @@ Surface Pro 3 units develop a **dead horizontal or vertical strip** on their tou
 
 A known trigger is the **Type Cover's magnetic attachment strip**: repeated contact of the keyboard cover's magnets with the screen edge can corrupt calibration data in the affected region. Multiple SP3 users report dead zones appearing specifically along the bottom edge after heavy Type Cover use.
 
+---
+
+## Known Limitations and Unknowns
+
+**This script is based on reverse engineering and experimental findings:**
+- The NCP response channel (report 0x06) has been observed in a single undocumented session but has **not been verified across multiple devices** or kernel versions.
+- The exact conditions under which calibration succeeds or fails are not fully understood.
+- Longevity varies: some units remain calibrated indefinitely, while others experience drift recurrence within days (see [Note on longevity](#note-on-longevity) below).
+- Linux-specific behavior: the `direct-path` report IDs (0x29–0x2D) present in the Windows device tree are absent from the Linux HID descriptor, which may indicate different firmware behavior on Linux vs. Windows.
+
+**If testing this script, please report your results** — both successes and failures — including your kernel version, device configuration, and diagnostic output. Community verification will help establish whether the script is reliably functional across different Surface Pro 3 units and configurations.
 
 ---
 
@@ -129,9 +141,11 @@ For a 15-byte NCP frame (no payload), this is a single 61-byte write:
 [0x05] [0x00] [7e 01 00 0f 00 01 20 0a 00 00 00 00 00 47] [zeros to pad to 61]
 ```
 
-**Stage 5 — The async response**
+**Stage 5 — The async response (EXPERIMENTAL)**
 
-Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` to capture the NCP response. During analysis of the DLL, candidate response reports were identified as **0x0B and 0x0C** (the ones the DLL probes for). However, in a subsequent session not included in this repository's chat logs, responses were empirically observed on **report 0x06**. Whether 0x06 is a Linux-specific observation, device-specific behavior, or kernel-version-dependent remains unclear—this critical finding came from an undocumented session and needs verification across multiple devices:
+Another key finding: the DLL's receive thread uses `ReadFile` on the HID device handle (async I/O), **not** `HidD_GetFeature`. On Linux this maps to a non-blocking `read()` on the hidraw fd. Previous script versions were polling GET_FEATURE, completely missing the responses. The v5 script uses `select()` + `read()` to capture the NCP response. During analysis of the DLL, candidate response reports were identified as **0x0B and 0x0C** (the ones the DLL probes for). However, in a subsequent session not included in this repository's chat logs, responses were empirically observed on **report 0x06**.
+
+**⚠️ UNVERIFIED FINDING:** The report 0x06 observation is based on a single undocumented session with no supporting chat logs and has not been verified across multiple devices. Whether 0x06 is a Linux-specific observation, device-specific behavior, or kernel-version-dependent remains unclear. This is an experimental finding and should be treated as preliminary.
 
 ```
 Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
@@ -141,7 +155,7 @@ Input report 0x06: 7e 01 00 12 00 81 20 0b 00 00 00 00 00 00 21 21 21 60 ...
                                                                       payload = "!!!" = unknown/intermediate state
 ```
 
-The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state, not a confirmed trigger. The DLL continues polling after receiving it. The screen was confirmed fully fixed in that same subsequent session, but that session's logs are not present in this repository, so the exact mechanism of success is incompletely documented here. To understand whether the 0x06 response channel is consistent across devices or a one-time observation, further testing on additional Surface Pro 3 units would be valuable.
+The `0x81` in the flags byte (bit 7 set) indicates a **response frame**. The `!!!` payload maps to the string `"Unknown status, waiting"` in `CalibG4.exe` — it is an intermediate polling state. The DLL continues polling after receiving it. In the undocumented session where 0x06 was observed, the screen was confirmed fully fixed, but without verifiable logs, the exact mechanism of success cannot be independently confirmed here. Further testing on additional Surface Pro 3 units is needed to establish whether 0x06 is a consistent response channel or a device-specific or kernel-version-dependent behavior.
 
 **Full CalibG4 call sequence (from Ghidra, main sequence at `0x1400010B0`):**
 - Read buffer: 4096 bytes
@@ -187,9 +201,11 @@ sudo python3 ntrig_calib.py --module-id 0x0002  # override NCP module ID (defaul
 6. Attempt direct (non-chunked) NCP via report 0x05
 7. Try async input report reads after each send, looking for NCP responses
 
-Use `--calibrate` to send only the START_CALIB command, skipping the diagnostic probing — recommended once you have confirmed from a `--diag` run that the NCP channel is responding. **Important:** The response channel confirmation in this script is based on empirical observations from an undocumented session. Your kernel version or device configuration may differ; always verify with `--diag` first to ensure the NCP channel is responding on your system before running `--calibrate`.
+Use `--calibrate` to send only the START_CALIB command, skipping the diagnostic probing — recommended once you have confirmed from a `--diag` run that the NCP channel is responding. **Important:** The response channel confirmation in this script is based on empirical observations from an undocumented session and **has not been verified across multiple devices**. Your kernel version or device configuration may differ; always verify with `--diag` first to ensure the NCP channel is responding on your system before running `--calibrate`.
 
 **After running, touch the previously-dead area.** It should respond immediately. No reboot required.
+
+**⚠️ Testing advisory:** This script is based on reverse engineering and experimental findings. Test cautiously on a non-critical device first. If the script successfully recalibrates your touchscreen, or if it fails to respond, please report your results (including device model, kernel version, and output from `--diag`) to help verify the script's reliability across different configurations.
 
 > **Note on longevity:** A [2017 report from René Rebe](https://web.archive.org/web/20250324201828/https://rene.rebe.de/2017-07-29/n-trig-touch-screens-occasionally-need-re-calibration/) ([video](https://www.youtube.com/watch?v=mVX-7ZI8ysk)) noted that calibration may be temporary on some units — lasting only "a day, or a boot or two" before drift recurs. If the dead zone comes back, re-run the script. Frequent recurrence may indicate the digitizer hardware is physically degrading.
 
