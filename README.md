@@ -258,6 +258,17 @@ ebf0168a60111d58f7709cfa8c7d129002cbdb192f253dddad6737122ddbdde7  CalibG4.exe
 
 ---
 
+## Related Issues
+
+This project addresses dead zone issues reported across multiple Surface devices and platforms:
+
+- [Surface Pro 3 touchscreen problem](https://www.reddit.com/r/Surface/comments/2knsyd/surface_pro_3_touchscreen_problem/) (Reddit)
+- [Bottom part of touch screen responds to pen but not touch](https://www.reddit.com/r/Surface/comments/1b1hdc9/bottom_part_of_touch_screen_responds_to_pen_but/) (Reddit)
+- [SurfaceBook 3 screen dead zones](https://www.reddit.com/r/Surface/comments/180v7xl/surfacebook_3_screen_dead_zones/) (Reddit)
+- [iptsd issue #202 — N-Trig calibration discussion](https://github.com/linux-surface/iptsd/issues/202) (GitHub)
+
+---
+
 ## License
 
 The Python script (`ntrig_calib.py`) is released under the AGPLv3 License. See [LICENSE](./LICENSE) file.
